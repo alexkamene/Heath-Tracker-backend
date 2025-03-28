@@ -19,6 +19,8 @@ const Leaderboard = require("../models/Leaderboard");
 const Badge = require("../models/Badges");
 const HealthJournal = require("../models/HealthJournal");
 const Challenge = require("../models/Challenges");
+
+const HealthReminder = require("../models/healthrReminder.js");
 // Authentication Middleware
 const verifyToken = (req, res, next) => {
   try {
@@ -750,6 +752,55 @@ router.delete("/api/journal/:entryId", verifyToken, async (req, res) => {
     res.json({ message: "Journal entry deleted!" });
   } catch (error) {
     res.status(500).json({ error: "Failed to delete journal entry" });
+  }
+});
+// calendars and reminders
+
+
+// ✅ Create a new health reminder
+router.post("/reminder", verifyToken, async (req, res) => {
+  try {
+    const { title, description, date, reminderType } = req.body;
+    const newReminder = new HealthReminder({ userId: req.userId, title, description, date, reminderType });
+    await newReminder.save();
+    res.status(201).json({ message: "Reminder added successfully!" });
+
+  } catch (error) {
+    res.status(500).json({ error: "Failed to add reminder" });
+  }
+});
+
+// ✅ Fetch all reminders for the logged-in user
+router.get("/api/reminders", verifyToken, async (req, res) => {
+  try {
+    const reminders = await HealthReminder.find({ userId: req.userId }).sort({ date: 1 });
+    res.json(reminders);
+  } catch (error) {
+    res.status(500).json({ error: "Failed to fetch reminders" });
+  }
+});
+
+// ✅ Mark a reminder as completed
+router.put("/reminder/:id/complete", verifyToken, async (req, res) => {
+  try {
+    const reminder = await HealthReminder.findById(req.params.id);
+    if (!reminder) return res.status(404).json({ error: "Reminder not found" });
+
+    reminder.completed = true;
+    await reminder.save();
+    res.json({ message: "Reminder marked as completed!" });
+  } catch (error) {
+    res.status(500).json({ error: "Failed to update reminder" });
+  }
+});
+
+// ✅ Delete a reminder
+router.delete("/reminder/:id", verifyToken, async (req, res) => {
+  try {
+    await HealthReminder.findByIdAndDelete(req.params.id);
+    res.json({ message: "Reminder deleted successfully!" });
+  } catch (error) {
+    res.status(500).json({ error: "Failed to delete reminder" });
   }
 });
 

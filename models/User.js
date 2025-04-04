@@ -15,6 +15,8 @@ const UserSchema = new mongoose.Schema({
   streak: { type: Number, default: 0 }, // 🔥 Consecutive Days Active
   lastActive: { type: Date }, // 📅 Track Last Activity
   badges: [{ title: String, description: String, dateEarned: Date }], 
+  twoFactorSecret: { type: String,default: null }, // Secret for TOTP
+  twoFactorEnabled: { type: Boolean, default: false }, // Whether 2FA is active
 });
 
 module.exports = mongoose.model("User", UserSchema);

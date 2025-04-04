@@ -19,8 +19,9 @@ const Leaderboard = require("../models/Leaderboard");
 const Badge = require("../models/Badges");
 const HealthJournal = require("../models/HealthJournal");
 const Challenge = require("../models/Challenges");
-
+const speakeasy = require('speakeasy');
 const HealthReminder = require("../models/healthrReminder.js");
+const qrcode = require('qrcode');
 // Authentication Middleware
 const verifyToken = (req, res, next) => {
   try {
@@ -99,26 +100,146 @@ router.post("/api/register", async (req, res) => {
 
 
 // ✅ LOGIN A USER with Debugging Fixes
+
+
+// router.post("/api/login", async (req, res) => {
+//   try {
+//     const { email, password, ip, twoFactorCode } = req.body;
+
+//     // Validate IP
+//     if (!ip) return res.status(400).json({ error: "IP address is required" });
+
+//     // Find user
+//     const user = await User.findOne({ email });
+//     if (!user) {
+//       await SecurityLog.create({ action: "Login Attempt", status: "Failed", ip_address: ip });
+//       return res.status(400).json({ message: "User not found" });
+//     }
+
+//     // Verify password
+//     const isMatch = await bcrypt.compare(password, user.password);
+//     if (!isMatch) {
+//       await SecurityLog.create({ userId: user._id, action: "Login Attempt", status: "Failed", ip_address: ip });
+//       return res.status(400).json({ message: "Invalid credentials" });
+//     }
+
+//     // Check if 2FA is enabled for the user
+//     if (user.twoFactorEnabled) {
+//       if (!twoFactorCode) {
+//         return res.status(400).json({ 
+//           message: "Two-factor authentication code required",
+//           twoFactorRequired: true,
+//         });
+//       }
+
+//       // Verify 2FA code
+//       const isCodeValid = speakeasy.totp.verify({
+//         secret: user.twoFactorSecret,
+//         encoding: 'base32',
+//         token: twoFactorCode,
+//         window: 1, // Allow 30-second window before/after
+//       });
+
+//       if (!isCodeValid) {
+//         await SecurityLog.create({ 
+//           userId: user._id, 
+//           action: "2FA Verification", 
+//           status: "Failed", 
+//           ip_address: ip 
+//         });
+//         return res.status(400).json({ message: "Invalid 2FA code" });
+//       }
+//     }
+
+//     // Fetch Geo-Location
+//     let locationData = { city: "Unknown", country: "Unknown" };
+//     try {
+//       const response = await axios.get(`http://ip-api.com/json/${ip}`);
+//       if (response.data.status === "success") {
+//         locationData = { city: response.data.city, country: response.data.country };
+//       }
+//     } catch (error) {
+//       console.error("❌ Failed to fetch location. Skipping:", error.message);
+//     }
+
+//     // Get Device & Browser Info
+//     const agent = useragent.parse(req.headers["user-agent"] || "Unknown Device");
+//     const deviceInfo = `${agent.os.family} (${agent.device.family}) - ${agent.toAgent()}`;
+
+//     // Generate JWT Token
+//     const token = jwt.sign({ _id: user._id, username: user.username }, process.env.JWT_SECRET, { expiresIn: "1h" });
+
+//     // Log Successful Login
+//     await SecurityLog.create({
+//       userId: user._id,
+//       action: user.twoFactorEnabled ? "Login with 2FA" : "Login Attempt",
+//       status: "Success",
+//       ip_address: ip,
+//       location: `${locationData.city}, ${locationData.country}`,
+//       device: deviceInfo,
+//     });
+
+//     res.json({ token, role: user.role, userId: user._id, username: user.username });
+
+//   } catch (error) {
+//     console.error("❌ Login Error:", error);
+//     res.status(500).json({ error: "Internal Server Error" });
+//   }
+// });
 router.post("/api/login", async (req, res) => {
   try {
-    const { email, password, ip } = req.body;
+    const { email, password, ip, twoFactorCode } = req.body;
 
-    
+    // Step 1: Validate IP
     if (!ip) return res.status(400).json({ error: "IP address is required" });
 
+    // Find user
     const user = await User.findOne({ email });
     if (!user) {
       await SecurityLog.create({ action: "Login Attempt", status: "Failed", ip_address: ip });
       return res.status(400).json({ message: "User not found" });
     }
 
+    // Step 2: Verify password
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
       await SecurityLog.create({ userId: user._id, action: "Login Attempt", status: "Failed", ip_address: ip });
       return res.status(400).json({ message: "Invalid credentials" });
     }
 
-    // ✅ Fetch Geo-Location with Error Handling
+    // Step 3: Check if 2FA is enabled and handle accordingly
+    if (user.twoFactorEnabled) {
+      if (!twoFactorCode) {
+        // Prompt for 2FA code after email/password/IP are validated
+        return res.status(200).json({ 
+          message: "Please provide your 2FA code",
+          twoFactorRequired: true,
+          userId: user._id // Send userId to identify in next step
+        });
+      }
+
+      // Verify 2FA code if provided
+      const isCodeValid = speakeasy.totp.verify({
+        secret: user.twoFactorSecret,
+        encoding: 'base32',
+        token: twoFactorCode,
+        window: 1,
+      });
+
+      if (!isCodeValid) {
+        await SecurityLog.create({ 
+          userId: user._id, 
+          action: "2FA Verification", 
+          status: "Failed", 
+          ip_address: ip 
+        });
+        return res.status(400).json({ message: "Invalid 2FA code" });
+      }
+    } else if (twoFactorCode) {
+      console.warn("⚠️ 2FA code provided but 2FA is not enabled for user:", user.email);
+    }
+
+    // Step 4: Proceed with login after all validations
     let locationData = { city: "Unknown", country: "Unknown" };
     try {
       const response = await axios.get(`http://ip-api.com/json/${ip}`);
@@ -129,17 +250,14 @@ router.post("/api/login", async (req, res) => {
       console.error("❌ Failed to fetch location. Skipping:", error.message);
     }
 
-    // ✅ Get Device & Browser Info Safely
     const agent = useragent.parse(req.headers["user-agent"] || "Unknown Device");
     const deviceInfo = `${agent.os.family} (${agent.device.family}) - ${agent.toAgent()}`;
 
-    // ✅ Generate JWT Token
-    const token = jwt.sign({ _id: user._id, username:user.username }, process.env.JWT_SECRET);
+    const token = jwt.sign({ _id: user._id, username: user.username }, process.env.JWT_SECRET);
 
-    // ✅ Log Successful Login
     await SecurityLog.create({
       userId: user._id,
-      action: "Login Attempt",
+      action: user.twoFactorEnabled ? "Login with 2FA" : "Login Attempt",
       status: "Success",
       ip_address: ip,
       location: `${locationData.city}, ${locationData.country}`,
@@ -154,8 +272,65 @@ router.post("/api/login", async (req, res) => {
   }
 });
 
+// route for 2fa
 
+router.post("/api/setup-2fa", verifyToken, async (req, res) => {
+  try {
+    const user = await User.findById(req.userId);
+    if (!user) return res.status(404).json({ message: "User not found" });
 
+    // Generate 2FA secret
+    const secret = speakeasy.generateSecret({
+      length: 20,
+      name: `FitnessApp:${user.email}`,
+    });
+
+    // Save temporary secret (not enabled until verified)
+    user.twoFactorSecret = secret.base32;
+    await user.save();
+
+    // Generate QR code for authenticator app
+    const qrCodeUrl = await qrcode.toDataURL(secret.otpauth_url);
+
+    res.json({
+      message: "Scan this QR code with your authenticator app",
+      qrCodeUrl,
+      secret: secret.base32, // For manual entry if needed
+    });
+  } catch (error) {
+    console.error("❌ 2FA Setup Error:", error);
+    res.status(500).json({ error: "Failed to setup 2FA" });
+  }
+});
+
+// Route to verify and enable 2FA
+router.post("/api/verify-2fa", verifyToken, async (req, res) => {
+  try {
+    const { twoFactorCode } = req.body;
+    const user = await User.findById(req.userId);
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    const isCodeValid = speakeasy.totp.verify({
+      secret: user.twoFactorSecret,
+      encoding: 'base32',
+      token: twoFactorCode,
+      window: 1,
+    });
+
+    if (!isCodeValid) {
+      return res.status(400).json({ message: "Invalid 2FA code" });
+    }
+
+    // Enable 2FA
+    user.twoFactorEnabled = true;
+    await user.save();
+
+    res.json({ message: "2FA enabled successfully" });
+  } catch (error) {
+    console.error("❌ 2FA Verification Error:", error);
+    res.status(500).json({ error: "Failed to verify 2FA" });
+  }
+});
 //add heath data
 router.post("/api/healthdata", verifyToken, async (req, res) => {
   try {

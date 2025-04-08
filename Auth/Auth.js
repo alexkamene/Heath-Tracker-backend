@@ -22,8 +22,16 @@ const Challenge = require("../models/Challenges");
 const speakeasy = require('speakeasy');
 const HealthReminder = require("../models/healthrReminder.js");
 const qrcode = require('qrcode');
+const sendEmail = require('../utils/sendEmail'); 
+const MealEntry = require('../models/Mealentry');
+const Exercise=require('../models/exersieschema.js')
+const Goal = require('../models/goal');
+const SleepEntry=require('../models/sleep');
+const WaterEntry=require('../models/water');
+const MentalWellnessEntry=require('../models/MentalWellnessEntry')
 // Authentication Middleware
 const verifyToken = (req, res, next) => {
+
   try {
       // Extract token from the Authorization header
       const token = req.headers['authorization']?.split(' ')[1];
@@ -52,6 +60,7 @@ const verifyToken = (req, res, next) => {
       return res.status(500).send("An error occurred"); // Internal server error
   }
 };
+
 const verifyAdmin = async (req, res, next) => {
   // First, verify the token
   await verifyToken(req, res, async () => {
@@ -186,39 +195,34 @@ router.post("/api/register", async (req, res) => {
 //     res.status(500).json({ error: "Internal Server Error" });
 //   }
 // });
+
 router.post("/api/login", async (req, res) => {
   try {
     const { email, password, ip, twoFactorCode } = req.body;
 
-    // Step 1: Validate IP
     if (!ip) return res.status(400).json({ error: "IP address is required" });
 
-    // Find user
     const user = await User.findOne({ email });
     if (!user) {
       await SecurityLog.create({ action: "Login Attempt", status: "Failed", ip_address: ip });
       return res.status(400).json({ message: "User not found" });
     }
 
-    // Step 2: Verify password
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
       await SecurityLog.create({ userId: user._id, action: "Login Attempt", status: "Failed", ip_address: ip });
       return res.status(400).json({ message: "Invalid credentials" });
     }
 
-    // Step 3: Check if 2FA is enabled and handle accordingly
     if (user.twoFactorEnabled) {
       if (!twoFactorCode) {
-        // Prompt for 2FA code after email/password/IP are validated
         return res.status(200).json({ 
           message: "Please provide your 2FA code",
           twoFactorRequired: true,
-          userId: user._id // Send userId to identify in next step
+          userId: user._id
         });
       }
 
-      // Verify 2FA code if provided
       const isCodeValid = speakeasy.totp.verify({
         secret: user.twoFactorSecret,
         encoding: 'base32',
@@ -239,7 +243,6 @@ router.post("/api/login", async (req, res) => {
       console.warn("⚠️ 2FA code provided but 2FA is not enabled for user:", user.email);
     }
 
-    // Step 4: Proceed with login after all validations
     let locationData = { city: "Unknown", country: "Unknown" };
     try {
       const response = await axios.get(`http://ip-api.com/json/${ip}`);
@@ -264,6 +267,23 @@ router.post("/api/login", async (req, res) => {
       device: deviceInfo,
     });
 
+    // ✅ Send Resend Email Notification
+    await sendEmail({
+      to: user.email,
+      subject: "🔐 New Login Detected",
+      html: `
+        <h2>Hello ${user.username},</h2>
+        <p>You just logged in to your account.</p>
+        <ul>
+          <li><strong>IP Address:</strong> ${ip}</li>
+          <li><strong>Location:</strong> ${locationData.city}, ${locationData.country}</li>
+          <li><strong>Device:</strong> ${deviceInfo}</li>
+          <li><strong>Date:</strong> ${new Date().toLocaleString()}</li>
+        </ul>
+        <p>If this wasn’t you, please reset your password immediately.</p>
+      `
+    });
+
     res.json({ token, role: user.role, userId: user._id, username: user.username });
 
   } catch (error) {
@@ -271,6 +291,7 @@ router.post("/api/login", async (req, res) => {
     res.status(500).json({ error: "Internal Server Error" });
   }
 });
+
 
 // route for 2fa
 
@@ -381,7 +402,255 @@ router.get("/healthdata", verifyToken, async (req, res) => {
   }
 });
 
+// meal api
+// routes/food.js (new file)
 
+
+router.get('/search', async (req, res) => {
+  const { query } = req.query;
+  if (!query) return res.status(400).json({ error: 'Query is required' });
+
+  try {
+    const response = await axios.get(`https://api.edamam.com/api/food-database/v2/parser`, {
+      params: {
+        app_id: "8ebaf000",
+        app_key: "40a738a6422b8c319ffcbeb0baa8d96a	",
+        ingr: query
+      }
+    });
+
+    res.json(response.data);
+  } catch (error) {
+    console.error('Error fetching from Edamam:', error.message);
+    res.status(500).json({ error: 'Failed to fetch food data' });
+  }
+});
+// routes/meals.js
+
+router.delete('/delete/:id', verifyToken, async (req, res) => {
+  try {
+    await MealEntry.findByIdAndDelete(req.params.id);
+    res.json({ message: 'Meal deleted' });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to delete meal' });
+  }
+});
+
+
+
+router.post('/add', verifyToken, async (req, res) => {
+  const { foodName, calories, quantity, mealType } = req.body;
+  const userId = req.user.id; // Make sure this comes from the token
+
+  try {
+    const newMeal = new MealEntry({
+      userId:req.userId,
+      foodName,
+      calories,
+      quantity,
+      mealType,
+      date: new Date().setHours(0, 0, 0, 0),
+    });
+
+    const savedMeal = await newMeal.save();
+    console.log('✅ Meal saved:', savedMeal);
+    res.status(201).json(savedMeal);
+  } catch (err) {
+    console.error('❌ Failed to save meal:', err);
+    res.status(500).json({ error: 'Could not add meal' });
+  }
+});
+
+
+router.delete('/delete/:id', verifyToken, async (req, res) => {
+  try {
+    await MealEntry.findByIdAndDelete(req.params.id);
+    res.json({ message: 'Meal deleted' });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to delete meal' });
+  }
+});
+// Get meals for today
+// backend route (e.g., routes/meals.js)
+router.get('/api/today', verifyToken, async (req, res) => {
+  try {
+    const start = new Date();
+    start.setHours(0, 0, 0, 0); // Today at 00:00
+
+    const end = new Date();
+    end.setHours(23, 59, 59, 999); // Today at 23:59
+
+    const meals = await MealEntry.find({
+      userId: req.userId,
+      date: {
+        $gte: start,
+        $lte: end
+      }
+    });
+
+    res.json(meals);
+  } catch (err) {
+    console.error('Error fetching today’s meals:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+// PUT /update/:id
+router.put('/update/:id', verifyToken, async (req, res) => {
+  const { quantity } = req.body;
+  const mealId = req.params.id;
+
+  try {
+    const meal = await MealEntry.findById(mealId);
+    if (!meal) return res.status(404).json({ error: 'Meal not found' });
+
+    // Calculate new calories assuming original calories were based on original quantity
+    const perUnitCalorie = meal.calories / meal.quantity;
+    const updatedCalories = Math.round(perUnitCalorie * quantity);
+
+    meal.quantity = quantity;
+    meal.calories = updatedCalories;
+    await meal.save();
+
+    res.json({ message: 'Meal updated', meal });
+  } catch (error) {
+    console.error('Update failed:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+
+
+router.post('/set-goal', verifyToken, async (req, res) => {
+  const { type, target, frequency } = req.body;
+
+  if (!type || !target || !frequency) {
+    return res.status(400).json({ msg: 'All fields are required (type, target, frequency)' });
+  }
+
+  try {
+    const userId = req.userId;
+
+    let goal = await Goal.findOne({ user: userId });
+
+    if (goal) {
+      // Update existing goal
+      goal.type = type;
+      goal.target = target;
+      goal.frequency = frequency;
+      await goal.save();
+      return res.status(200).json({ msg: 'Goal updated', goal });
+    } else {
+      // Create new goal
+      goal = new Goal({
+        user: userId,
+        type,
+        target,
+        frequency,
+      });
+      await goal.save();
+      return res.status(201).json({ msg: 'Goal created', goal });
+    }
+  } catch (error) {
+    console.error('Error saving goal:', error.message);
+    res.status(500).json({ msg: 'Server error', error: error.message });
+  }
+});
+// GET current user's goal
+router.get('/my-goal', verifyToken, async (req, res) => {
+  try {
+    const userId = req.userId;
+    const goal = await Goal.findOne({ user: userId });
+    if (!goal) return res.status(404).json({ msg: 'No goal found' });
+    res.json(goal);
+  } catch (err) {
+    res.status(500).json({ msg: 'Server error', error: err.message });
+  }
+});
+// exercise
+router.post('/exercise/add', verifyToken, async (req, res) => {
+  const { name, duration, caloriesBurned } = req.body;
+  const exercise = new Exercise({ userId: req.userId, name, duration, caloriesBurned });
+  await exercise.save();
+  res.json({ success: true, exercise });
+});
+// getting a user exersice
+router.get('/my-exercises', verifyToken, async (req, res) => {
+  try {
+    const exercises = await Exercise.find({ userId: req.userId }).sort({ date: -1 });
+    res.json(exercises);
+  } catch (err) {
+    console.error('Error fetching exercises:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+})
+
+// Add sleep entry
+
+router.post('/sleep', verifyToken, async (req, res) => {
+  const { sleepTime, wakeTime, duration } = req.body;
+
+  const newEntry = new SleepEntry({
+    userId: req.userId,
+    date: new Date(),
+    sleepTime,
+    wakeTime,
+    duration
+  });
+
+  await newEntry.save();
+  res.json({ message: 'Sleep logged successfully' });
+});
+
+
+// Get last 7 days sleep data
+router.get('/sleep/week', verifyToken, async (req, res) => {
+  try {
+    const entries = await SleepEntry.find({ userId: req.userId })
+      .sort({ date: -1 })
+      .limit(7);
+
+    res.json(entries);
+  } catch (err) {
+    console.error('Error fetching sleep data:', err);
+    res.status(500).send('Server error');
+  }
+});
+// POST /water
+// Body: { date, amount }
+router.post('/water', verifyToken, async (req, res) => {
+  const entry = new WaterEntry({
+    userId: req.userId,
+    date: req.body.date,
+    amount: req.body.amount
+  });
+  await entry.save();
+  res.status(201).json(entry);
+});
+
+// GET /water/week
+router.get('/water/week', verifyToken, async (req, res) => {
+  const entries = await WaterEntry.find({ userId: req.userId })
+    .sort({ date: -1 }).limit(7);
+  res.json(entries);
+});
+
+router.post('/mental-wellness', verifyToken, async (req, res) => {
+  const entry = new MentalWellnessEntry({
+    userId: req.userId,
+    date: req.body.date,
+    mood: req.body.mood,
+    stressLevel: req.body.stressLevel,
+    notes: req.body.notes
+  });
+  await entry.save();
+  res.status(201).json(entry);
+});
+// GET /mental-wellness/week
+router.get('/mental-wellness/week', verifyToken, async (req, res) => {
+  const entries = await MentalWellnessEntry.find({ userId: req.userId })
+    .sort({ date: -1 }).limit(7); // Get the last 7 days of entries
+  res.json(entries);
+});
 
 //get all health data
 router.get("/api/healthdata", verifyToken, async (req, res) => {

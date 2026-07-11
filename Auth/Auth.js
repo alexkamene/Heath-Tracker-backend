@@ -413,8 +413,8 @@ router.get('/search', async (req, res) => {
   try {
     const response = await axios.get(`https://api.edamam.com/api/food-database/v2/parser`, {
       params: {
-        app_id: "8ebaf000",
-        app_key: "40a738a6422b8c319ffcbeb0baa8d96a	",
+        app_id: "ce3172c3",
+        app_key: "8bff52959b3c01a43f740c0b5bc844a4",
         ingr: query
       }
     });

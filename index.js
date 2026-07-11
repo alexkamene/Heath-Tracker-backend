@@ -25,7 +25,7 @@ res.send("Welcome to my first backend")
 const connectDB=async()=>{
 
     try {
-         await mongoose.connect(process.env.MONGO_URL1,{ useNewUrlParser: true, useUnifiedTopology: true })
+         await mongoose.connect(process.env.MONGO_UR,{ useNewUrlParser: true, useUnifiedTopology: true })
     console.log("Database connected")
     } catch (error) {
         console.log("Database connection failed")
